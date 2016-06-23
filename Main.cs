@@ -87,9 +87,9 @@ namespace EyeSpy
             {
                 ServerApi.Hooks.NetGetData.Deregister(this, OnGetData);
                 ServerApi.Hooks.NetSendData.Deregister(this, OnSendData);
-                GameHooks.Initialize -= OnInitialize;
-                ServerHooks.Leave -= OnLeave;
-                ServerHooks.Join -= OnJoin;
+                ServerApi.Hooks.GameInitialize.Deregister(this, OnInitialize);
+                ServerApi.Hooks.ServerLeave.Deregister(this, OnLeave);
+                ServerApi.Hooks.ServerJoin.Deregister(this, OnJoin);
                 Database.Dispose();
             }
         }
@@ -97,11 +97,11 @@ namespace EyeSpy
         {
             ServerApi.Hooks.NetGetData.Register(this, OnGetData);
             ServerApi.Hooks.NetSendData.Register(this, OnSendData);
-            GameHooks.Initialize += OnInitialize;
-            ServerHooks.Leave += OnLeave;
-            ServerHooks.Join += OnJoin;
+            ServerApi.Hooks.GameInitialize.Register(this, OnInitialize);
+            ServerApi.Hooks.ServerLeave.Register(this, OnLeave);
+            ServerApi.Hooks.ServerJoin.Register(this, OnJoin);
         }
-        void OnInitialize()
+        void OnInitialize(EventArgs args)
         {
             config = new Config();
             if (!Directory.Exists(SavePath))
@@ -219,14 +219,16 @@ namespace EyeSpy
             }
         }
 
-        public void OnJoin(int who, HandledEventArgs args)
+        private void OnJoin(JoinEventArgs args)
         {
+            int who = 0;
             PlayerList[who] = new PlayerData(this, TShock.Players[who]);
         }
-        public void OnLeave(int who)
+        private void OnLeave(LeaveEventArgs args)
         {
             try
             {
+                int who = 0;
                 if (PlayerList[who] != null)
                     PlayerList[who].StopUpdating();
                 PlayerList[who] = null;
@@ -234,6 +236,7 @@ namespace EyeSpy
             catch (Exception ex)
             {
                 TShock.Log.ConsoleError(ex.ToString());
+                int who = 0;
                 if (who >= 0)
                     PlayerList[who] = null;
             }
