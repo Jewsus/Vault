@@ -1,29 +1,27 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Data;
 using System.IO;
-
 using Terraria;
 using TShockAPI;
 using TShockAPI.DB;
-
-using Hooks;
 using Mono.Data.Sqlite;
 using MySql.Data.MySqlClient;
 using Newtonsoft.Json;
+using TerrariaApi.Server;
 
-namespace Vault
+namespace EyeSpy
 {
     internal class BossNPC
     {
         public NPC Npc;
-        public Dictionary<int, int> damageData = new Dictionary<int,int>();
+        public Dictionary<int, int> damageData = new Dictionary<int, int>();
         public BossNPC(NPC npc)
         {
-            this.Npc = npc;
+            Npc = npc;
         }
         public void AddDamage(int playerID, int damage)
         {
@@ -36,27 +34,27 @@ namespace Vault
         {
             int totalDmg = 0;
             damageData.Values.ForEach(v => totalDmg += v);
-            float valueMod = (float)totalDmg / (float)Npc.lifeMax;
+            float valueMod = totalDmg / (float)Npc.lifeMax;
             if (valueMod > 1)
                 valueMod = 1;
-            float newValue = (float)Npc.value * valueMod;
-            float valuePerDmg = (float)newValue / (float)totalDmg;
+            float newValue = Npc.value * valueMod;
+            float valuePerDmg = newValue / totalDmg;
             //Console.WriteLine("Total dmg: {0}, newValue: {1}, val/dmg: {2}", totalDmg, newValue, valuePerDmg);
             float Mod = 1;
-            if (Vault.config.OptionalMobModifier.ContainsKey(Npc.netID))
-                Mod *= Vault.config.OptionalMobModifier[Npc.netID]; // apply custom modifiers      
-            Dictionary<int, int> returnDict = new Dictionary<int,int>();
-            foreach (KeyValuePair<int,int> kv in damageData)
+            if (EyeSpy.config.OptionalMobModifier.ContainsKey(Npc.netID))
+                Mod *= EyeSpy.config.OptionalMobModifier[Npc.netID]; // apply custom modifiers      
+            Dictionary<int, int> returnDict = new Dictionary<int, int>();
+            foreach (KeyValuePair<int, int> kv in damageData)
                 returnDict[kv.Key] = (int)(kv.Value * valuePerDmg * Mod);
             return returnDict;
         }
 
     }
-    [APIVersion(1, 12)]
-    public class Vault : TerrariaPlugin
+    [ApiVersion(1, 23)]
+    public class EyeSpy : TerrariaPlugin
     {
         public IDbConnection Database;
-        public String SavePath = Path.Combine(TShock.SavePath, "Vault/");
+        public string SavePath = Path.Combine(TShock.SavePath, "EyeSpy/");
         internal PlayerData[] PlayerList = new PlayerData[256];
         internal static Config config;
         private readonly Random random = new Random();
@@ -64,7 +62,7 @@ namespace Vault
         internal List<BossNPC> BossList = new List<BossNPC>();
         public override string Name
         {
-            get { return "Vault"; }
+            get { return "EyeSpy"; }
         }
         public override string Author
         {
@@ -78,7 +76,7 @@ namespace Vault
         {
             get { return new Version("0.16"); }
         }
-        public Vault(Main game) : base(game)
+        public EyeSpy(Main game) : base(game)
         {
             Order = 1;
             CurrentInstance = this;
@@ -87,8 +85,8 @@ namespace Vault
         {
             if (disposing)
             {
-                NetHooks.GetData -= OnGetData;
-                NetHooks.SendData -= OnSendData;
+                ServerApi.Hooks.NetGetData.Deregister(this, OnGetData);
+                ServerApi.Hooks.NetSendData.Deregister(this, OnSendData);
                 GameHooks.Initialize -= OnInitialize;
                 ServerHooks.Leave -= OnLeave;
                 ServerHooks.Join -= OnJoin;
@@ -97,10 +95,10 @@ namespace Vault
         }
         public override void Initialize()
         {
-            NetHooks.GetData += OnGetData;
-            NetHooks.SendData += OnSendData;
-            GameHooks.Initialize += OnInitialize;            
-            ServerHooks.Leave += OnLeave;
+            ServerApi.Hooks.NetGetData.Register(this, OnGetData);
+            ServerApi.Hooks.NetSendData.Register(this, OnSendData);
+            GameHooks.Initialize += OnInitialize;
+            ServerApi.Hooks.ServerLeave.Register(this, OnPlayerLeave);
             ServerHooks.Join += OnJoin;
         }
         void OnInitialize()
@@ -124,12 +122,12 @@ namespace Vault
                     };
                     break;
                 case "sqlite":
-                    string sql = Path.Combine(SavePath, "vault.sqlite");
+                    string sql = Path.Combine(SavePath, "EyeSpy.sqlite");
                     Database = new SqliteConnection(string.Format("uri=file://{0},Version=3", sql));
                     break;
             }
             SqlTableCreator sqlcreator = new SqlTableCreator(Database, Database.GetSqlType() == SqlType.Sqlite ? (IQueryBuilder)new SqliteQueryCreator() : new MysqlQueryCreator());
-            sqlcreator.EnsureExists(new SqlTable("vault_players",
+            sqlcreator.EnsureTableStructure(new SqlTable("vault_players",
                 new SqlColumn("username", MySqlDbType.VarChar) { Length = 30 },
                 new SqlColumn("money", MySqlDbType.Int32),
                 new SqlColumn("worldID", MySqlDbType.Int32),
@@ -140,10 +138,10 @@ namespace Vault
                 ));
 
 
-            Commands.ChatCommands.Add(new Command("vault.pay", PayCommand, "pay"));
-            Commands.ChatCommands.Add(new Command("vault.balance", BalanceCommand, "balance"));
-            Commands.ChatCommands.Add(new Command("vault.modify", ModifyCommand, "modbal", "modifybalance"));
-            Commands.ChatCommands.Add(new Command("vault.seen", SeenCommand, "seen"));
+            Commands.ChatCommands.Add(new Command("eyespy.pay", PayCommand, "pay"));
+            Commands.ChatCommands.Add(new Command("eyespy.balance", BalanceCommand, "balance"));
+            Commands.ChatCommands.Add(new Command("eyespy.modify", ModifyCommand, "modbal", "modifybalance"));
+            Commands.ChatCommands.Add(new Command("eyespy.seen", SeenCommand, "seen"));
 
         }
         public void SeenCommand(CommandArgs args)
@@ -154,12 +152,12 @@ namespace Vault
                 bool found = false;
                 if (reader.Read())
                 {
-                    args.Player.SendMessage(String.Format("{0} has last been seen at {1}", args.Parameters[0], JsonConvert.DeserializeObject<DateTime>(reader.Get<string>("lastSeen"))), Color.DarkGreen);
+                    args.Player.SendMessage(string.Format("{0} has last been seen at {1}", args.Parameters[0], JsonConvert.DeserializeObject<DateTime>(reader.Get<string>("lastSeen"))), Color.DarkGreen);
                     found = true;
                 }
                 reader.Dispose();
                 if (!found)
-                    args.Player.SendMessage(String.Format("Haven't seen {0}", args.Parameters[0]), Color.DarkOrange);
+                    args.Player.SendMessage(string.Format("Haven't seen {0}", args.Parameters[0]), Color.DarkOrange);
                 return;
             }
             args.Player.SendMessage("Syntax: /seen \"player name\"", Color.DarkOrange);
@@ -175,12 +173,12 @@ namespace Vault
                     var targetPlayer = GetPlayerByName(args.Parameters[0]);
                     if (targetPlayer == null)
                     {
-                        args.Player.SendMessage(String.Format("Player {0} not found", args.Parameters[0]), Color.DarkOrange);
+                        args.Player.SendMessage(string.Format("Player {0} not found", args.Parameters[0]), Color.DarkOrange);
                         return;
                     }
                     if (player.ChangeMoney(-amount, MoneyEventFlags.PayCommand) && targetPlayer.ChangeMoney(amount, MoneyEventFlags.PayCommand))
                     {
-                        targetPlayer.TSPlayer.SendMessage(String.Format("You've received {0} from {1}", MoneyToString(amount), args.Player.Name), Color.DarkGreen);
+                        targetPlayer.TSPlayer.SendMessage(string.Format("You've received {0} from {1}", MoneyToString(amount), args.Player.Name), Color.DarkGreen);
                         args.Player.SendMessage("Transfer successful", Color.DarkGreen);
                         return;
                     }
@@ -196,9 +194,9 @@ namespace Vault
             if (args.Parameters.Count == 2 && int.TryParse(args.Parameters[1], out amount))
             {
                 if (ModifyBalance(args.Parameters[0], amount))
-                    args.Player.SendMessage(String.Format("Player {0}'s balance modified", args.Parameters[0]), Color.DarkGreen);
+                    args.Player.SendMessage(string.Format("Player {0}'s balance modified", args.Parameters[0]), Color.DarkGreen);
                 else
-                    args.Player.SendMessage(String.Format("Can't modify player {0}'s balance. No such player found or balance below zero.", args.Parameters[0]), Color.DarkOrange);
+                    args.Player.SendMessage(string.Format("Can't modify player {0}'s balance. No such player found or balance below zero.", args.Parameters[0]), Color.DarkOrange);
                 return;
             }
             args.Player.SendMessage("Syntax: /modbal \"user name\" amount", Color.DarkOrange);
@@ -208,16 +206,16 @@ namespace Vault
             var player = PlayerList[args.Player.Index];
             if (player != null)
             {
-                if (args.Parameters.Count > 0 && args.Player.Group.HasPermission("vault.balance.others"))
+                if (args.Parameters.Count > 0 && args.Player.Group.HasPermission("eyespy.balance.others"))
                 {
                     int b = GetBalance(args.Parameters[0]);
                     if (b == -1)
-                        args.Player.SendMessage(String.Format("No records for player {0} found", args.Parameters[0]), Color.DarkOrange);
+                        args.Player.SendMessage(string.Format("No records for player {0} found", args.Parameters[0]), Color.DarkOrange);
                     else
-                        args.Player.SendMessage(String.Format("{0}'s balance: {1}", args.Parameters[0], MoneyToString(b)), Color.DarkOliveGreen);
+                        args.Player.SendMessage(string.Format("{0}'s balance: {1}", args.Parameters[0], MoneyToString(b)), Color.DarkOliveGreen);
                     return;
                 }
-                args.Player.SendMessage(String.Format("Balance: {0}", MoneyToString(player.Money)), Color.DarkOliveGreen);
+                args.Player.SendMessage(string.Format("Balance: {0}", MoneyToString(player.Money)), Color.DarkOliveGreen);
             }
         }
 
@@ -235,7 +233,7 @@ namespace Vault
             }
             catch (Exception ex)
             {
-                Log.ConsoleError(ex.ToString());
+                TShock.Log.ConsoleError(ex.ToString());
                 if (who >= 0)
                     PlayerList[who] = null;
             }
@@ -254,9 +252,9 @@ namespace Vault
                         player.LastState = flags;
                         player.IdleCount = 0;
                     }
-                }            
+                }
             }
-            catch (Exception ex) { Log.ConsoleError(ex.ToString()); }
+            catch (Exception ex) { TShock.Log.ConsoleError(ex.ToString()); }
         }
         public void OnSendData(SendDataEventArgs e)
         {
@@ -264,7 +262,7 @@ namespace Vault
                 return;
             try
             {
-                if (e.MsgID == PacketTypes.NpcStrike)
+                if (e.MsgId == PacketTypes.NpcStrike)
                 {
                     NPC npc = Main.npc[e.number];
                     // Console.WriteLine("(SendData) NpcStrike -> 1:{0} 2:{4} 3:{5} 4:{6} 5:{1} remote:{2} ignore:{3}", e.number, e.number5, e.remoteClient, e.ignoreClient, e.number2, e.number3, e.number4);
@@ -336,7 +334,7 @@ namespace Vault
                         }
                     }
                 }
-                else if (e.MsgID == PacketTypes.PlayerKillMe)
+                else if (e.MsgId == PacketTypes.PlayerKillMe)
                 {
                     //Console.WriteLine("(SendData) PlayerKillMe -> 1:{0} 2:{4} 3:{5} 4:{6} 5:{1} remote:{2} ignore:{3}", e.number, e.number5, e.remoteClient, e.ignoreClient, e.number2, e.number3, e.number4);
                     // 1-playerID, 2-direction, 3-dmg, 4-PVP
@@ -348,21 +346,21 @@ namespace Vault
                             penaltyAmmount = RandomNumber(config.DeathPenaltyMin, config.DeathPenaltyMax);
                         else
                             penaltyAmmount = (int)(deadPlayer.Money * (config.DeathPenaltyPercent / 100f));
-                     //   Console.WriteLine("penalty ammount: {0}", penaltyAmmount);
+                        //   Console.WriteLine("penalty ammount: {0}", penaltyAmmount);
                         if (e.number4 == 1)
                         {
-                            if (!deadPlayer.TSPlayer.Group.HasPermission("vault.bypass.death") && deadPlayer.ChangeMoney(-penaltyAmmount, MoneyEventFlags.PvP, true) && config.PvPWinnerTakesLoosersPenalty && deadPlayer.LastPVPid != -1)
+                            if (!deadPlayer.TSPlayer.Group.HasPermission("eyespy.bypass.death") && deadPlayer.ChangeMoney(-penaltyAmmount, MoneyEventFlags.PvP, true) && config.PvPWinnerTakesLoosersPenalty && deadPlayer.LastPVPid != -1)
                             {
                                 var killer = PlayerList[deadPlayer.LastPVPid];
                                 if (killer != null)
                                     killer.ChangeMoney(penaltyAmmount, MoneyEventFlags.PvP, true);
                             }
                         }
-                        else if (!deadPlayer.TSPlayer.Group.HasPermission("vault.bypass.death"))
-                            deadPlayer.ChangeMoney(-penaltyAmmount, MoneyEventFlags.Death,true);
+                        else if (!deadPlayer.TSPlayer.Group.HasPermission("eyespy.bypass.death"))
+                            deadPlayer.ChangeMoney(-penaltyAmmount, MoneyEventFlags.Death, true);
                     }
                 }
-                else if (e.MsgID == PacketTypes.PlayerDamage)
+                else if (e.MsgId == PacketTypes.PlayerDamage)
                 {
                     // Console.WriteLine("(SendData) PlayerDamage -> 1:{0} 2:{4} 3:{5} 4:{6} 5:{1} remote:{2} ignore:{3}", e.number, e.number5, e.remoteClient, e.ignoreClient, e.number2, e.number3, e.number4);
                     // 1: pID, ignore: Who, 2: dir, 3:dmg, 4:pvp;
@@ -373,13 +371,15 @@ namespace Vault
                             player.LastPVPid = e.ignoreClient;
                     }
                 }
-            }            
-            catch (Exception ex) { Log.ConsoleError(ex.ToString()); }
+            }
+            catch (Exception ex) { TShock.Log.ConsoleError(ex.ToString()); }
         }
 
 
         //-------------------- Static ----------------------------------------------------
-        private static Vault CurrentInstance = null;
+        private static EyeSpy CurrentInstance = null;
+        private object NetHooks;
+
         public static event MoneyEvent OnMoneyEvent;
         public delegate void MoneyEvent(MoneyEventArgs args);
 
@@ -399,7 +399,7 @@ namespace Vault
                 if (Reader.Read())
                     return Reader.Get<int>("money");
             }
-            catch (Exception ex) { Log.ConsoleError(ex.ToString()); }
+            catch (Exception ex) { TShock.Log.ConsoleError(ex.ToString()); }
             return -1;
         }
         public static bool SetBalance(string Name, int amount, bool announce = true, MoneyEventFlags flags = (MoneyEventFlags)4)
@@ -413,7 +413,7 @@ namespace Vault
                     if (!player.ChangeMoney(modAmount, flags))
                         return false;
                     else if (announce)
-                        player.TSPlayer.SendMessage(String.Format("Your balance has been set to {0}", MoneyToString(amount)), Color.DarkOrange);
+                        player.TSPlayer.SendMessage(string.Format("Your balance has been set to {0}", MoneyToString(amount)), Color.DarkOrange);
                     return true;
                 }
                 else
@@ -423,7 +423,7 @@ namespace Vault
                     {
                         MoneyEventArgs args = new MoneyEventArgs() { Amount = amount - Reader.Get<int>("money"), CurrentMoney = Reader.Get<int>("money"), PlayerName = Name, PlayerIndex = -1, EventFlags = flags };
                         Reader.Dispose();
-                        if (!Vault.InvokeEvent(args))
+                        if (!InvokeEvent(args))
                         {
                             CurrentInstance.Database.Query("UPDATE vault_players SET money = @0 WHERE username = @1 AND worldID = @2", amount, Name, Main.worldID);
                             return true;
@@ -433,7 +433,7 @@ namespace Vault
                         Reader.Dispose();
                 }
             }
-            catch (Exception ex) { Log.ConsoleError(ex.ToString()); }
+            catch (Exception ex) { TShock.Log.ConsoleError(ex.ToString()); }
             return false;
         }
         public static bool ModifyBalance(string Name, int amount, bool announce = true, MoneyEventFlags flags = (MoneyEventFlags)4)
@@ -454,7 +454,7 @@ namespace Vault
                         MoneyEventArgs args = new MoneyEventArgs() { Amount = amount, CurrentMoney = Reader.Get<int>("money"), PlayerName = Name, PlayerIndex = -1, EventFlags = flags };
                         int Newamount = Reader.Get<int>("money") + amount;
                         Reader.Dispose();
-                        if (!Vault.InvokeEvent(args))
+                        if (!InvokeEvent(args))
                         {
                             CurrentInstance.Database.Query("UPDATE vault_players SET money = @0 WHERE username = @1 AND worldID = @2", Newamount, Name, Main.worldID);
                             return true;
@@ -464,7 +464,7 @@ namespace Vault
                         Reader.Dispose();
                 }
             }
-            catch (Exception ex) { Log.ConsoleError(ex.ToString()); }
+            catch (Exception ex) { TShock.Log.ConsoleError(ex.ToString()); }
             return false;
         }
         public static Dictionary<int, int> GetPlayerKillCounts(string Name)
@@ -480,11 +480,11 @@ namespace Vault
                 {
                     var reader = CurrentInstance.Database.QueryReader("SELECT killData FROM vault_players WHERE username = @0 AND worldID = @1", Name, Main.worldID);
                     if (reader.Read())
-                        returnDict = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<int, int>>(reader.Get<string>("killData"));
+                        returnDict = JsonConvert.DeserializeObject<Dictionary<int, int>>(reader.Get<string>("killData"));
                     reader.Dispose();
                 }
             }
-            catch (Exception ex) { Log.ConsoleError(ex.ToString()); }
+            catch (Exception ex) { TShock.Log.ConsoleError(ex.ToString()); }
 
             return returnDict;
         }
@@ -494,15 +494,15 @@ namespace Vault
             int total = 0;
             if (reader.Read())
             {
-                total = reader.Get<int>("totalOnline");               
-                
+                total = reader.Get<int>("totalOnline");
+
             }
             reader.Dispose();
             return total;
         }
         public static DateTime? LastSeenPlayer(string Name)
         {
-            var reader = CurrentInstance.Database.QueryReader("SELECT lastSeen FROM vault_players WHERE username = @0", Name);  
+            var reader = CurrentInstance.Database.QueryReader("SELECT lastSeen FROM vault_players WHERE username = @0", Name);
             if (reader.Read())
             {
                 DateTime lastSeen = JsonConvert.DeserializeObject<DateTime>(reader.Get<string>("lastSeen"));
@@ -579,7 +579,7 @@ namespace Vault
             }
             catch (Exception ex)
             {
-                Log.ConsoleError(ex.Message);
+                TShock.Log.ConsoleError(ex.Message);
                 config = new Config();
             }
         }
@@ -603,14 +603,14 @@ namespace Vault
                 }
                 else
                 {
-                    Log.ConsoleError("Vault config not found. Creating new one");
+                    TShock.Log.ConsoleError("EyeSpy config not found. Creating new one");
                     CreateConfig();
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Log.ConsoleError(ex.Message);
+                TShock.Log.ConsoleError(ex.Message);
             }
             return false;
         }
