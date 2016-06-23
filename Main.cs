@@ -98,7 +98,7 @@ namespace EyeSpy
             ServerApi.Hooks.NetGetData.Register(this, OnGetData);
             ServerApi.Hooks.NetSendData.Register(this, OnSendData);
             GameHooks.Initialize += OnInitialize;
-            ServerApi.Hooks.ServerLeave.Register(this, OnPlayerLeave);
+            ServerHooks.Leave += OnLeave;
             ServerHooks.Join += OnJoin;
         }
         void OnInitialize()
